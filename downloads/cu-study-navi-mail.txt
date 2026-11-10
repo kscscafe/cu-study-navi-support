@@ -1,4 +1,4 @@
-(function(root) {
+﻿(function(root) {
   const normalize = s => String(s || '').normalize('NFKC').replace(/\s+/g, '').trim();
   function week(now = new Date()) {
     const shifted = new Date(now.getTime() + 9 * 3600000);

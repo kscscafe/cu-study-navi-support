@@ -1,0 +1,270 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>貼り付け用コード | CU Study Navi</title><style>body{font-family:system-ui,sans-serif;margin:24px;color:#222}textarea{width:100%;height:70vh;box-sizing:border-box;font:14px/1.6 monospace}button{padding:12px 24px;margin:12px 0;cursor:pointer}</style></head><body><a href="../weekly-mail.html">設定ガイドに戻る</a><h1>貼り付け用コード</h1><p>「コードをコピー」を押し、Apps Scriptのコード.gsを全選択して貼り替えてください。</p><button id="copy" type="button">コードをコピー</button><p id="status" role="status"></p><textarea id="code" readonly aria-label="Apps Scriptに貼り付けるコード" spellcheck="false">(function(root) {
+  const normalize = s =&gt; String(s || &#x27;&#x27;).normalize(&#x27;NFKC&#x27;).replace(/\s+/g, &#x27;&#x27;).trim();
+  function week(now = new Date()) {
+    const shifted = new Date(now.getTime() + 9 * 3600000);
+    const day = shifted.getUTCDay();
+    let back = (day + 3) % 7;
+    if (back === 0 &amp;&amp; shifted.getUTCHours() &lt; 12) back = 7;
+    shifted.setUTCDate(shifted.getUTCDate() - back);
+    shifted.setUTCHours(12, 0, 0, 0);
+    const start = shifted.getTime() - 9 * 3600000;
+    return {start, end: start + 7 * 86400000};
+  }
+  function dateValue(text, termStart, termEnd) {
+    const m = String(text || &#x27;&#x27;).match(/(?:(\d{4})[\/年-])?(\d{1,2})[\/月-](\d{1,2})/);
+    if (!m || !termStart || !termEnd) return null;
+    const years = m[1] ? [+m[1]] : [...new Set([+termStart.slice(0,4), +termEnd.slice(0,4)])];
+    const candidates = years.map(y =&gt; `${y}-${m[2].padStart(2,&#x27;0&#x27;)}-${m[3].padStart(2,&#x27;0&#x27;)}`)
+      .filter(d =&gt; { const parsed=new Date(d+&#x27;T00:00:00Z&#x27;); return d &gt;= termStart &amp;&amp; d &lt;= termEnd &amp;&amp; Number.isFinite(parsed.getTime()) &amp;&amp; parsed.toISOString().slice(0,10) === d; });
+    return candidates.length === 1 ? candidates[0] : null;
+  }
+  function parseManual(text) {
+    const normalized = text.normalize(&#x27;NFKC&#x27;).replace(/第\s*(\d+)\s*回/g, &#x27;第$1回&#x27;);
+    const chunks = [...normalized.matchAll(/(?:^|\n)\s*第(\d{1,2})回[^\S\n]*(.*?)(?=\n\s*第\d{1,2}回|$)/gs)];
+    const seen = new Set();
+    return chunks.map(m =&gt; {
+      const number = +m[1];
+      if (number &lt; 1 || number &gt; 99 || seen.has(number)) throw new Error(&#x27;授業回の重複・範囲を確認してください。&#x27;);
+      seen.add(number);
+      const body = m[2].trim();
+      const title = body.split(&#x27;\n&#x27;).find(x =&gt; x.trim()) || `第${number}回`;
+      const tasks = [...new Set(body.match(/小テスト|レポート|ディベート/g) || [])];
+      return {number, title: title.slice(0,200), description: body, tasks};
+    });
+  }
+  function classify(lesson, dates, now = new Date()) {
+    const w = week(now), today = new Intl.DateTimeFormat(&#x27;sv-SE&#x27;,{timeZone:&#x27;Asia/Tokyo&#x27;}).format(now);
+    const start = dateValue(lesson.start, dates.start, dates.end);
+    const end = dateValue(lesson.end, dates.start, dates.end);
+    const weekStart = new Date(w.start + 9*3600000).toISOString().slice(0,10);
+    const weekEnd = new Date(w.end + 9*3600000).toISOString().slice(0,10);
+    if (lesson.status === &#x27;完了&#x27;) return &#x27;完了&#x27;;
+    if (end &amp;&amp; end &lt; today) return &#x27;期限経過・状況確認&#x27;;
+    if (end &amp;&amp; end &gt;= weekStart &amp;&amp; end &lt;= weekEnd) return &#x27;今週の期限&#x27;;
+    if (start &amp;&amp; start &gt; today) return &#x27;公開予定&#x27;;
+    return &#x27;受講状況を確認&#x27;;
+  }
+  function cleanText(value) {
+    return String(value || &#x27;&#x27;).replace(/\r/g,&#x27;&#x27;).split(&#x27;\n&#x27;).map(x=&gt;x.replace(/[ \t\u00a0\u3000]+/g,&#x27; &#x27;).trim()).filter(Boolean).join(&#x27;\n&#x27;);
+  }
+  function overallStatus(lesson, info) {
+    if (lesson.manualStatus) return lesson.status;
+    if (!info || lesson.number === &#x27;final&#x27;) return &#x27;未確認&#x27;;
+    const required=[&#x27;講義&#x27;, ...info.tasks.map(t=&gt;t===&#x27;小テスト&#x27;?&#x27;テスト&#x27;:t)];
+    const states=required.map(k=&gt;lesson.states?.[k] || &#x27;未確認&#x27;);
+    if(states.every(s=&gt;s===&#x27;完了&#x27;)) {
+      // A completed lecture is not enough when an additional observed activity remains.
+      const extra=Object.values(lesson.states || {}).filter(s=&gt;s!==&#x27;空欄&#x27; &amp;&amp; s!==&#x27;未確認&#x27;);
+      if(extra.some(s=&gt;s!==&#x27;完了&#x27;)) return &#x27;進行中&#x27;;
+      return &#x27;完了&#x27;;
+    }
+    if(states.includes(&#x27;進行中&#x27;) || states.includes(&#x27;完了&#x27;)) return &#x27;進行中&#x27;;
+    return &#x27;未確認&#x27;;
+  }
+  const api = {normalize, week, dateValue, parseManual, classify, cleanText, overallStatus};
+  root.CUCore = api;
+  if (typeof module !== &#x27;undefined&#x27;) module.exports = api;
+})(globalThis);
+
+
+(function(root){
+ const C=root.CUCore || require(&#x27;./core.js&#x27;);
+ const iso=t=&gt;new Date(t).toISOString().slice(0,10);
+ function nextWindow(now=new Date()){
+  const j=new Date(now.getTime()+9*3600000);let days=(3-j.getUTCDay()+7)%7;
+  if(days===0&amp;&amp;j.getUTCHours()&gt;=18)days=7;
+  j.setUTCDate(j.getUTCDate()+days);j.setUTCHours(18,0,0,0);
+  const send=j.getTime()-9*3600000;
+  const start=iso(j.getTime()+86400000);
+  return {send,start,end:iso(Date.parse(start)+7*86400000)};
+ }
+ function mode(course,guide){
+  const dates=course.lessons.filter(l=&gt;typeof l.number===&#x27;number&#x27;).map(l=&gt;C.dateValue(l.start,guide.start,guide.end));
+  if(!dates.length||dates.some(x=&gt;!x))return &#x27;unknown&#x27;;
+  return new Set(dates).size===1?&#x27;batch&#x27;:&#x27;weekly&#x27;;
+ }
+ function brief(info){
+  if(!info)return &#x27;シラバス未登録&#x27;;
+  const clean=C.cleanText(info.description);
+  const goals=clean.split(/2\)学習目標[：:]/)[1]?.split(/3\)目次[：:]/)[0];
+  return (goals||clean).split(&#x27;\n&#x27;).filter(x=&gt;x&amp;&amp;!/^第\d+回|^課題[：:]/.test(x)).slice(0,3).join(&#x27;\n&#x27;);
+ }
+ function build(guide,window){
+  const rows=[],warnings=[],references=[];
+  for(const c of guide.courses){
+   if(mode(c,guide)!==&#x27;weekly&#x27;)continue;
+   for(const l of c.lessons){const start=C.dateValue(l.start,guide.start,guide.end);if(typeof l.number===&#x27;number&#x27;&amp;&amp;start&gt;=window.start&amp;&amp;start&lt;window.end)references.push(l.number);}
+  }
+  const nums=[...new Set(references)];
+  const base=nums.length===1?nums[0]:null;
+  if(!nums.length)warnings.push(&#x27;対象週に毎週公開科目の公開予定がないため、一括公開科目の次の回は選んでいません。&#x27;);
+  if(nums.length&gt;1)warnings.push(&#x27;毎週公開科目の授業回が一致しないため、一括公開科目の標準回は未確定です。&#x27;);
+  for(const c of guide.courses){
+   const type=mode(c,guide),ordered=c.lessons.filter(l=&gt;typeof l.number===&#x27;number&#x27;).sort((a,b)=&gt;a.number-b.number);
+   let targets=[];
+   if(type===&#x27;weekly&#x27;)targets=ordered.filter(l=&gt;{const d=C.dateValue(l.start,guide.start,guide.end);return d&gt;=window.start&amp;&amp;d&lt;window.end;});
+   else if(type===&#x27;batch&#x27;&amp;&amp;base){
+    let frontier=0;
+    for(const l of ordered){if(l.number!==frontier+1)break;const info=c.syllabus?.lessons.find(i=&gt;i.number===l.number);if(l.states?.講義===&#x27;完了&#x27;||C.overallStatus(l,info)===&#x27;完了&#x27;)frontier=l.number;else break;}
+    const candidate=ordered.find(l=&gt;l.number===Math.max(base,frontier+1));
+    if(candidate&amp;&amp;C.dateValue(candidate.start,guide.start,guide.end)&lt;window.end)targets=[candidate];
+   }else if(type===&#x27;unknown&#x27;)warnings.push(`${c.name}：公開日を確認できません。`);
+   const pending=[];
+   for(const l of ordered){
+    if(targets.includes(l))continue;
+    const info=c.syllabus?.lessons.find(i=&gt;i.number===l.number);
+    const before=base?l.number&lt;base:C.dateValue(l.start,guide.start,guide.end)&lt;window.start;
+    if(!before&amp;&amp;l.states?.講義!==&#x27;完了&#x27;)continue;
+    if(C.overallStatus(l,info)===&#x27;完了&#x27;)continue;
+    const tasks=info?.tasks?.filter(t=&gt;l.states?.[t===&#x27;小テスト&#x27;?&#x27;テスト&#x27;:t]!==&#x27;完了&#x27;)||[];
+    pending.push(`第${l.number}回：${l.states?.講義===&#x27;完了&#x27;?&#x27;講義完了／&#x27;:&#x27;&#x27;}${tasks.length?tasks.join(&#x27;・&#x27;)+&#x27;の状況確認&#x27;:&#x27;受講・課題の状況確認&#x27;}（終了 ${l.end||&#x27;未確認&#x27;}）`);
+   }
+   const items=targets.filter(l=&gt;C.overallStatus(l,c.syllabus?.lessons.find(i=&gt;i.number===l.number))!==&#x27;完了&#x27;).map(l=&gt;{
+    const info=c.syllabus?.lessons.find(i=&gt;i.number===l.number),prev=c.syllabus?.lessons.find(i=&gt;i.number===l.number-1);
+    return {number:l.number,title:info?.title||&#x27;内容未登録&#x27;,start:l.start,end:l.end,tasks:info?.tasks||[],previous:brief(prev),current:brief(info),connection:prev&amp;&amp;info?`${prev.title} → ${info.title}`:&#x27;シラバスを登録すると前回と今回を対比できます。&#x27;};
+   });
+   rows.push({name:c.name,type,items,pending});
+  }
+  const subject=`▶▶ Study Navi ▶▶ ${window.start.slice(5).replace(&#x27;-&#x27;,&#x27;/&#x27;)}〜 学習ガイド`;
+  const updated=Number.isFinite(Date.parse(guide.updated))?new Intl.DateTimeFormat(&#x27;ja-JP&#x27;,{timeZone:&#x27;Asia/Tokyo&#x27;,dateStyle:&#x27;short&#x27;,timeStyle:&#x27;short&#x27;}).format(new Date(guide.updated))+&#x27;（日本時間）&#x27;:&#x27;取得日時不明&#x27;;
+  const parts=[`Study Navi｜${window.start.slice(5).replace(&#x27;-&#x27;,&#x27;/&#x27;)}〜 学習ガイド`,`進捗：${updated} 時点`, &#x27;最新の情報はCloud Campusにて確認してください。提出状況と締切期日もCloud Campusでご確認ください。&#x27;,&#x27;&#x27;, &#x27;【今週やること】&#x27;];
+  for(const r of rows)parts.push(`• ${r.name}：${r.items.map(i=&gt;&#x27;第&#x27;+i.number+&#x27;回 &#x27;+i.title).join(&#x27; ／ &#x27;)||&#x27;今回の案内対象なし&#x27;}`);
+  for(const r of rows){
+   parts.push(&#x27;&#x27;,&#x27;━━━━━━━━━━━━━━━━━━━━&#x27;,`【${r.name}】`,&#x27;━━━━━━━━━━━━━━━━━━━━&#x27;,&#x27;&#x27;);
+   for(const i of r.items)parts.push(`第${i.number}回 ${i.title}`,`公開 ${i.start} ／ 終了 ${i.end}`,`課題：${i.tasks.join(&#x27;・&#x27;)||&#x27;未確認&#x27;}`,&#x27;&#x27;,&#x27;── 前回の要点 ──&#x27;,&#x27;（シラバスから抜粋）&#x27;,i.previous,&#x27;&#x27;,&#x27;── 今回の内容 ──&#x27;,&#x27;（シラバスから抜粋）&#x27;,i.current,&#x27;&#x27;,&#x27;── 前回 → 今回 ──&#x27;,&#x27;（テーマの対比）&#x27;,i.connection,&#x27;&#x27;);
+   if(r.pending.length)parts.push(&#x27;&#x27;,&#x27;── 状況を確認する授業・課題 ──&#x27;,...r.pending);
+  }
+  if(warnings.length)parts.push(&#x27;&#x27;,&#x27;【確認事項】&#x27;,...warnings);
+  parts.push(&#x27;&#x27;,&#x27;進捗・授業：https://ccampus.org/learners/attendProgress&#x27;,&#x27;配信停止は拡張機能の「週次メール」から行えます。&#x27;);
+  return {subject,text:parts.join(&#x27;\n&#x27;),html:emailHTML(parts),rows,warnings,window};
+ }
+ function emailHTML(parts){
+  const escape=value=&gt;String(value).replace(/[&amp;&lt;&gt;&quot;&#x27;]/g,c=&gt;({&#x27;&amp;&#x27;:&#x27;&amp;amp;&#x27;,&#x27;&lt;&#x27;:&#x27;&amp;lt;&#x27;,&#x27;&gt;&#x27;:&#x27;&amp;gt;&#x27;,&#x27;&quot;&#x27;:&#x27;&amp;quot;&#x27;,&quot;&#x27;&quot;:&#x27;&amp;#39;&#x27;}[c]));
+  const body=parts.map((line,index)=&gt;{
+   if(line.startsWith(&#x27;• &#x27;)){
+    const split=line.indexOf(&#x27;：&#x27;);
+    const name=split&lt;0?line.slice(2):line.slice(2,split),detail=split&lt;0?&#x27;&#x27;:line.slice(split+1).trim();
+    const start=index===0||!parts[index-1].startsWith(&#x27;• &#x27;),end=index===parts.length-1||!parts[index+1].startsWith(&#x27;• &#x27;);
+    return (start?&#x27;&lt;ul style=&quot;margin:0;padding-left:24px&quot;&gt;&#x27;:&#x27;&#x27;)+`&lt;li style=&quot;margin:0 0 8px;padding-left:4px;line-height:1.7;overflow-wrap:anywhere&quot;&gt;&lt;strong&gt;${escape(name)}&lt;/strong&gt;：&lt;span&gt;${escape(detail)}&lt;/span&gt;&lt;/li&gt;`+(end?&#x27;&lt;/ul&gt;&#x27;:&#x27;&#x27;);
+   }
+   if(line===&#x27;━━━━━━━━━━━━━━━━━━━━&#x27;)return &#x27;&#x27;;
+   if(!line)return &#x27;&lt;div style=&quot;height:12px&quot;&gt;&lt;/div&gt;&#x27;;
+   if(index===0)return `&lt;h1 style=&quot;font-size:22px;line-height:1.5;margin:0 0 20px;color:#173f35&quot;&gt;${escape(line)}&lt;/h1&gt;`;
+   if(/^【.*】$/.test(line))return `&lt;h2 style=&quot;font-size:19px;margin:28px 0 16px;padding:12px 0;border-top:3px solid #24664f;border-bottom:1px solid #dce5de;color:#173f35&quot;&gt;${escape(line.slice(1,-1))}&lt;/h2&gt;`;
+   if(/^── .* ──$/.test(line))return `&lt;h3 style=&quot;font-size:16px;margin:18px 0 10px;padding:9px 12px;background:#edf4f0;border-left:4px solid #24664f&quot;&gt;${escape(line.slice(3,-3))}&lt;/h3&gt;`;
+   if(line.startsWith(&#x27;（&#x27;))return `&lt;p style=&quot;font-size:12px;color:#64756d;margin:0 0 8px&quot;&gt;${escape(line)}&lt;/p&gt;`;
+   return `&lt;p style=&quot;margin:0 0 8px;line-height:1.85;overflow-wrap:anywhere&quot;&gt;${escape(line).replace(/\n/g,&#x27;&lt;br&gt;&#x27;)}&lt;/p&gt;`;
+  }).join(&#x27;&#x27;);
+  return `&lt;html lang=&quot;ja&quot;&gt;&lt;body style=&quot;margin:0;padding:20px;background:#fff;color:#20332e;font:15px sans-serif&quot;&gt;&lt;div style=&quot;max-width:680px;margin:auto&quot;&gt;${body}&lt;/div&gt;&lt;/body&gt;&lt;/html&gt;`;
+ }
+ // Explicit whitelist: no notes, login data, account identifiers or page HTML.
+ function snapshot(g){return {term:g.term,start:g.start,end:g.end,updated:g.updated,courses:g.courses.map(c=&gt;({name:c.name,lessons:c.lessons.map(l=&gt;({number:l.number,start:l.start,end:l.end,states:l.states,status:l.status,manualStatus:!!l.manualStatus})),syllabus:c.syllabus?{lessons:c.syllabus.lessons.map(i=&gt;({number:i.number,title:i.title,description:i.description,tasks:i.tasks}))}:null}))};}
+ const api={nextWindow,mode,brief,build,snapshot};root.CUDigest=api;if(typeof module!==&#x27;undefined&#x27;)module.exports=api;
+})(globalThis);
+
+
+// Each student owns a separate, unshared project. No third-party service calls.
+function setup() {
+  const p=PropertiesService.getScriptProperties();
+  if(!/^[a-f0-9]{64}$/.test(p.getProperty(&#x27;SYNC_TOKEN&#x27;)||&#x27;&#x27;))throw new Error(&#x27;プロジェクト設定のスクリプトプロパティに、拡張で作ったSYNC_TOKENを保存してください。&#x27;);
+  if(!p.getProperty(&#x27;DATA_FILE_ID&#x27;)){
+    const folder=DriveApp.createFolder(&#x27;CU 週次案内（個人用）&#x27;);
+    const file=folder.createFile(&#x27;progress.json&#x27;,JSON.stringify({enabled:false}),MimeType.PLAIN_TEXT);
+    p.setProperties({DATA_FILE_ID:file.getId(),DATA_FOLDER_ID:folder.getId()});
+  }
+  const existing=ScriptApp.getProjectTriggers().filter(t=&gt;t.getHandlerFunction()===&#x27;sendWeekly&#x27;);
+  if(!existing.length)ScriptApp.newTrigger(&#x27;sendWeekly&#x27;).timeBased().onWeekDay(ScriptApp.WeekDay.WEDNESDAY).atHour(18).nearMinute(0).everyWeeks(1).inTimezone(&#x27;Asia/Tokyo&#x27;).create();
+  console.log(&#x27;初期設定完了。週次配信は拡張から有効にするまで停止中です。&#x27;);
+}
+function doGet(){
+  const endpoint=JSON.stringify(ScriptApp.getService().getUrl()).replace(/&lt;/g,&#x27;\\u003c&#x27;);
+  return HtmlService.createHtmlOutput(`&lt;!doctype html&gt;&lt;html lang=&quot;ja&quot;&gt;&lt;meta charset=&quot;utf-8&quot;&gt;&lt;title&gt;CU データ更新&lt;/title&gt;
+  &lt;style&gt;body{font:18px sans-serif;max-width:640px;margin:60px auto;padding:24px;color:#173f35}p{line-height:1.8}&lt;/style&gt;
+  &lt;h1&gt;CU データ更新&lt;/h1&gt;&lt;p id=&quot;status&quot;&gt;拡張機能からの更新を待っています。この画面は開いたままにしてください。&lt;/p&gt;
+  &lt;script&gt;
+  window.CU_SYNC_ENDPOINT=${endpoint};
+  window.CU_SYNC_VERSION=1;
+  window.cuSyncFromExtension=function(payload){
+    document.getElementById(&#x27;status&#x27;).textContent=&#x27;データを保存しています…&#x27;;
+    return new Promise(function(resolve){
+      google.script.run.withSuccessHandler(function(result){
+        document.getElementById(&#x27;status&#x27;).textContent=result.ok?&#x27;保存しました。このタブは閉じて構いません。&#x27;:&#x27;保存できません：&#x27;+result.error;
+        resolve(result);
+      }).withFailureHandler(function(error){
+        document.getElementById(&#x27;status&#x27;).textContent=&#x27;保存できません：&#x27;+error.message;
+        resolve({ok:false,error:error.message});
+      }).syncFromExtension(payload);
+    });
+  };
+  &lt;/script&gt;&lt;/html&gt;`).setTitle(&#x27;CU データ更新&#x27;);
+}
+// Same token validation and data validation as the POST endpoint; never sends email.
+function syncFromExtension(payload){
+  return JSON.parse(doPost({postData:{contents:JSON.stringify(payload)}}).getContent());
+}
+function json_(value){return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON);}
+function validToken_(supplied,expected){
+  if(typeof supplied!==&#x27;string&#x27;||!expected||supplied.length!==64||expected.length!==64)return false;
+  let diff=0;for(let i=0;i&lt;64;i++)diff|=supplied.charCodeAt(i)^expected.charCodeAt(i);return diff===0;
+}
+function validate_(g){
+  if(!g||typeof g.term!==&#x27;string&#x27;||g.term.length&gt;100||!Array.isArray(g.courses)||g.courses.length&gt;50)throw new Error(&#x27;進捗データの形式を確認してください。&#x27;);
+  for(const k of [&#x27;start&#x27;,&#x27;end&#x27;])if(!/^\d{4}-\d{2}-\d{2}$/.test(g[k])||!Number.isFinite(Date.parse(g[k])))throw new Error(&#x27;学期日程が不正です。&#x27;);
+  if(g.start&gt;=g.end||Date.parse(g.end)-Date.parse(g.start)&gt;366*86400000)throw new Error(&#x27;学期期間が不正です。&#x27;);
+  if(!Number.isFinite(Date.parse(g.updated)))throw new Error(&#x27;取得日時が不正です。&#x27;);
+  const check=(v,n)=&gt;{if(typeof v!==&#x27;string&#x27;||v.length&gt;n)throw new Error(&#x27;データ量または形式が不正です。&#x27;);};
+  for(const c of g.courses){
+    check(c.name,200);if(!Array.isArray(c.lessons)||c.lessons.length&gt;100)throw new Error(&#x27;授業回が不正です。&#x27;);
+    for(const l of c.lessons){if(l.number!==&#x27;final&#x27;&amp;&amp;(!Number.isInteger(l.number)||l.number&lt;1||l.number&gt;99))throw new Error(&#x27;授業回が不正です。&#x27;);check(l.start,30);check(l.end,30);}
+    if(c.syllabus){if(!Array.isArray(c.syllabus.lessons)||c.syllabus.lessons.length&gt;100)throw new Error(&#x27;シラバスが不正です。&#x27;);for(const i of c.syllabus.lessons){check(i.title,500);check(i.description,20000);if(!Array.isArray(i.tasks)||i.tasks.some(t=&gt;![&#x27;小テスト&#x27;,&#x27;レポート&#x27;,&#x27;ディベート&#x27;].includes(t)))throw new Error(&#x27;課題が不正です。&#x27;);}}
+  }
+  return CUDigest.snapshot(g);
+}
+function doPost(e){
+  const lock=LockService.getScriptLock();let acquired=false;
+  try{
+    const raw=e&amp;&amp;e.postData&amp;&amp;e.postData.contents;
+    if(!raw||raw.length&gt;1500000)throw new Error(&#x27;送信データが空か、大きすぎます。&#x27;);
+    const b=JSON.parse(raw),p=PropertiesService.getScriptProperties();
+    if(!validToken_(b.token,p.getProperty(&#x27;SYNC_TOKEN&#x27;)))return json_({ok:false,error:&#x27;接続キーが一致しません。&#x27;});
+    acquired=lock.tryLock(5000);if(!acquired)throw new Error(&#x27;配信または同期中です。少し待って再実行してください。&#x27;);
+    const id=p.getProperty(&#x27;DATA_FILE_ID&#x27;);if(!id)throw new Error(&#x27;GASのsetupを先に実行してください。&#x27;);
+    const file=DriveApp.getFileById(id);
+    if(b.action===&#x27;pause&#x27;){const data=JSON.parse(file.getBlob().getDataAsString());data.enabled=false;file.setContent(JSON.stringify(data));return json_({ok:true,enabled:false});}
+    if(typeof b.recipient!==&#x27;string&#x27;||b.recipient.length&gt;254||!/^\S+@[^\s@&lt;&gt;]+\.[^\s@&lt;&gt;]+$/.test(b.recipient)||/[\r\n,;&lt;&gt;]/.test(b.recipient))throw new Error(&#x27;送信先メールアドレスを確認してください。&#x27;);
+    if(typeof b.enabled!==&#x27;boolean&#x27;)throw new Error(&#x27;配信設定が不正です。&#x27;);
+    const snapshot=validate_(b.snapshot),updated=new Date().toISOString();
+    file.setContent(JSON.stringify({snapshot,recipient:b.recipient,enabled:b.enabled,updated}));
+    return json_({ok:true,recipient:b.recipient,enabled:b.enabled,updated});
+  }catch(error){return json_({ok:false,error:error.message||&#x27;処理に失敗しました。&#x27;});}
+  finally{if(acquired)lock.releaseLock();}
+}
+function sendWeekly(){
+  const lock=LockService.getScriptLock();if(!lock.tryLock(10000))throw new Error(&#x27;同期中のため配信できませんでした。実行履歴を確認してください。&#x27;);
+  try{
+    const p=PropertiesService.getScriptProperties(),id=p.getProperty(&#x27;DATA_FILE_ID&#x27;);if(!id)throw new Error(&#x27;setupを実行してください。&#x27;);
+    const data=JSON.parse(DriveApp.getFileById(id).getBlob().getDataAsString());if(!data.enabled)return;
+    const now=new Date(),j=new Date(now.getTime()+9*3600000);
+    // nearMinute(0) may run about 15 minutes either side of 18:00.
+    if(j.getUTCDay()!==3)return;
+    const start=new Date(Date.UTC(j.getUTCFullYear(),j.getUTCMonth(),j.getUTCDate()+1)).toISOString().slice(0,10);
+    const end=new Date(Date.parse(start)+7*86400000).toISOString().slice(0,10);
+    if(start&gt;data.snapshot.end||end&lt;=data.snapshot.start)return;
+    const key=[data.snapshot.term,data.snapshot.start,start].join(&#x27;|&#x27;);
+    if(p.getProperty(&#x27;DELIVERY_KEY&#x27;)===key)return;
+    const digest=CUDigest.build(data.snapshot,{start,end});
+    if(MailApp.getRemainingDailyQuota()&lt;1)throw new Error(&#x27;メール送信上限に達しています。&#x27;);
+    // Claim before send: a crash with uncertain delivery never triggers duplicate mail.
+    p.setProperties({DELIVERY_KEY:key,DELIVERY_STATE:&#x27;sending&#x27;});
+    try{MailApp.sendEmail({to:data.recipient,subject:digest.subject,body:digest.text,htmlBody:digest.html,name:&#x27;CU Study Navi（非公式）&#x27;});p.setProperty(&#x27;DELIVERY_STATE&#x27;,&#x27;sent&#x27;);}
+    catch(error){p.setProperty(&#x27;DELIVERY_STATE&#x27;,&#x27;failed&#x27;);throw error;}
+  }finally{lock.releaseLock();}
+}
+function sendTestEmail(){
+  const p=PropertiesService.getScriptProperties(),id=p.getProperty(&#x27;DATA_FILE_ID&#x27;);if(!id)throw new Error(&#x27;setupを実行してください。&#x27;);
+  const data=JSON.parse(DriveApp.getFileById(id).getBlob().getDataAsString());if(!data.snapshot||!data.recipient)throw new Error(&#x27;拡張から同期してください。&#x27;);
+  const digest=CUDigest.build(data.snapshot,CUDigest.nextWindow());
+  MailApp.sendEmail({to:data.recipient,subject:&#x27;【テスト】&#x27;+digest.subject,body:digest.text,htmlBody:digest.html,name:&#x27;CU Study Navi（非公式）&#x27;});
+  console.log(&#x27;テストメールを送信しました。&#x27;);
+}
+</textarea><script>document.getElementById('copy').addEventListener('click',async()=>{const area=document.getElementById('code');try{await navigator.clipboard.writeText(area.value);document.getElementById('status').textContent='コピーしました。';}catch(error){area.focus();area.select();document.getElementById('status').textContent='自動コピーできませんでした。選択されたコードを ⌘C（WindowsはCtrl+C）でコピーしてください。';}});</script></body></html>
